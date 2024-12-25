@@ -1,0 +1,106 @@
+#pragma once
+#include <vector>
+#include <queue>
+#include <thread>
+#include <functional>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+
+class parallel_scheduler {
+    std::vector<std::thread> threads;
+    std::queue<std::function<void()>> tasks;
+    std::mutex queue_mutex;
+    std::condition_variable condition;
+    std::atomic<bool> stop;
+
+public:
+    explicit parallel_scheduler(size_t capacity);
+    ~parallel_scheduler();
+
+    template<class F, class Arg>
+    void run(F&& func, Arg&& arg);
+
+private:
+    void worker();
+};
+
+/* parallel_scheduler.cpp */
+#include "parallel_scheduler.h"
+
+parallel_scheduler::parallel_scheduler(size_t capacity) : stop(false) {
+    for (size_t i = 0; i < capacity; ++i) {
+        threads.emplace_back(&parallel_scheduler::worker, this);
+    }
+}
+
+parallel_scheduler::~parallel_scheduler() {
+    stop = true;
+    condition.notify_all();
+    for (std::thread &t : threads) {
+        t.join();
+    }
+}
+
+void parallel_scheduler::worker() {
+    while (true) {
+        std::function<void()> task;
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            condition.wait(lock, [this] { return !tasks.empty() || stop; });
+            if (stop && tasks.empty()) return;
+            task = std::move(tasks.front());
+            tasks.pop();
+        }
+        task();
+    }
+}
+
+template<class F, class Arg>
+void parallel_scheduler::run(F&& func, Arg&& arg) {
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        tasks.emplace([func, arg] { func(arg); });
+    }
+    condition.notify_one();
+}
+
+/* demo_application.cpp */
+#include "parallel_scheduler.h"
+#include <iostream>
+#include <chrono>
+
+void example_task(int id) {
+    std::cout << "Task " << id << " is running.\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::cout << "Task " << id << " completed.\n";
+}
+
+int main() {
+    parallel_scheduler scheduler(4);
+
+    for (int i = 0; i < 10; ++i) {
+        scheduler.run(example_task, i);
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(6));
+    return 0;
+}
+
+# Makefile
+CC=g++
+CFLAGS=-Wall -g -std=c++11 -fPIC -pthread
+LDFLAGS=-shared
+TARGET_LIB=parallel_scheduler.so
+TARGET_DEMO=demo-application
+
+all: $(TARGET_LIB) $(TARGET_DEMO)
+
+$(TARGET_LIB): parallel_scheduler.cpp parallel_scheduler.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $(TARGET_LIB) parallel_scheduler.cpp
+
+$(TARGET_DEMO): demo_application.cpp parallel_scheduler.h
+	$(CC) $(CFLAGS) -o $(TARGET_DEMO) demo_application.cpp -L. -lparallel_scheduler -Wl,-rpath,.
+
+clean:
+	rm -f $(TARGET_LIB) $(TARGET_DEMO)
