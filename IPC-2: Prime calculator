@@ -1,0 +1,84 @@
+#include <iostream>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <cstring>
+#include <vector>
+
+int nth_prime(int n) {
+    std::vector<int> primes;
+    int num = 2;
+    while (primes.size() < n) {
+        bool is_prime = true;
+        for (int p : primes) {
+            if (num % p == 0) {
+                is_prime = false;
+                break;
+            }
+        }
+        if (is_prime) {
+            primes.push_back(num);
+        }
+        num++;
+    }
+    return primes[n - 1];
+}
+
+int main() {
+    int pipefd1[2], pipefd2[2];
+    pipe(pipefd1);
+    pipe(pipefd2);
+
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        close(pipefd1[1]);
+        close(pipefd2[0]);
+
+        int m;
+        while (read(pipefd1[0], &m, sizeof(m)) > 0) {
+            std::cout << "[Child] Calculating " << m << "-th prime number...\n";
+            int result = nth_prime(m);
+            write(pipefd2[1], &result, sizeof(result));
+            std::cout << "[Child] Sending calculation result of prime(" << m << ")...\n";
+        }
+
+        close(pipefd1[0]);
+        close(pipefd2[1]);
+    } else {
+        close(pipefd1[0]);
+        close(pipefd2[1]);
+
+        std::string input;
+        while (true) {
+            std::cout << "[Parent] Please enter the number: ";
+            std::cin >> input;
+            if (input == "exit") break;
+
+            int m = std::stoi(input);
+            write(pipefd1[1], &m, sizeof(m));
+            std::cout << "[Parent] Sending " << m << " to the child process...\n";
+            std::cout << "[Parent] Waiting for the response from the child process...\n";
+
+            int result;
+            read(pipefd2[0], &result, sizeof(result));
+            std::cout << "[Parent] Received calculation result of prime(" << m << ") = " << result << "...\n";
+        }
+
+        close(pipefd1[1]);
+        close(pipefd2[0]);
+        wait(nullptr);
+    }
+} 
+
+# Makefile
+CC=g++
+CFLAGS=-Wall -g
+TARGET=prime-calculator
+
+all: $(TARGET)
+
+$(TARGET): prime-calculator.cpp
+	$(CC) $(CFLAGS) -o $(TARGET) prime-calculator.cpp
+
+clean:
+	rm -f $(TARGET)
