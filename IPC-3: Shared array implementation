@@ -1,0 +1,93 @@
+#pragma once
+#include <string>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <semaphore.h>
+#include <stdexcept>
+#include <cstring>
+
+class shared_array {
+    int *data;
+    size_t size;
+    std::string name;
+    sem_t *sem;
+
+public:
+    shared_array(const std::string &array_name, size_t array_size) : name(array_name), size(array_size) {
+        int fd = shm_open(name.c_str(), O_CREAT | O_RDWR, 0666);
+        if (fd == -1) throw std::runtime_error("Failed to create shared memory");
+
+        ftruncate(fd, size * sizeof(int));
+        data = (int *)mmap(0, size * sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        close(fd);
+
+        sem = sem_open((name + "_sem").c_str(), O_CREAT, 0666, 1);
+        if (sem == SEM_FAILED) throw std::runtime_error("Failed to create semaphore");
+    }
+
+    ~shared_array() {
+        munmap(data, size * sizeof(int));
+        sem_close(sem);
+    }
+
+    int &operator[](size_t i) {
+        if (i >= size) throw std::out_of_range("Index out of bounds");
+        return data[i];
+    }
+
+    void lock() { sem_wait(sem); }
+    void unlock() { sem_post(sem); }
+};
+
+/* first.cpp */
+#include "shared_array.h"
+#include <iostream>
+
+int main() {
+    shared_array array("shared_array", 10);
+
+    while (true) {
+        array.lock();
+        for (size_t i = 0; i < 10; ++i) {
+            array[i] += 1;
+            std::cout << "[First] Incrementing index " << i << " to " << array[i] << "\n";
+        }
+        array.unlock();
+        sleep(1);
+    }
+}
+
+/* second.cpp */
+#include "shared_array.h"
+#include <iostream>
+
+int main() {
+    shared_array array("shared_array", 10);
+
+    while (true) {
+        array.lock();
+        for (size_t i = 0; i < 10; ++i) {
+            array[i] -= 1;
+            std::cout << "[Second] Decrementing index " << i << " to " << array[i] << "\n";
+        }
+        array.unlock();
+        sleep(1);
+    }
+}
+
+# Makefile
+CC=g++
+CFLAGS=-Wall -g
+TARGETS=first second
+
+all: $(TARGETS)
+
+first: first.cpp shared_array.h
+	$(CC) $(CFLAGS) -o first first.cpp
+
+second: second.cpp shared_array.h
+	$(CC) $(CFLAGS) -o second second.cpp
+
+clean:
+	rm -f $(TARGETS)
