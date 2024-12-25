@@ -1,0 +1,44 @@
+#include <iostream>
+#include <csignal>
+#include <unistd.h>
+#include <sys/types.h>
+#include <pwd.h>
+#include <ucontext.h>
+
+void handler(int sig, siginfo_t *info, void *ucontext) {
+    auto ctx = (ucontext_t *)ucontext;
+    auto *regs = &ctx->uc_mcontext.gregs;
+
+    struct passwd *pw = getpwuid(info->si_uid);
+
+    std::cout << "Received a SIGUSR1 signal from process " << info->si_pid;
+    std::cout << " executed by " << info->si_uid << " (" << (pw ? pw->pw_name : "unknown") << ").\n";
+    std::cout << "State of the context: EIP = " << regs[REG_EIP] << ", EAX = " << regs[REG_EAX];
+    std::cout << ", EBX = " << regs[REG_EBX] << ".\n";
+}
+
+int main() {
+    struct sigaction sa;
+    sa.sa_flags = SA_SIGINFO;
+    sa.sa_sigaction = handler;
+    sigaction(SIGUSR1, &sa, nullptr);
+
+    std::cout << "PID: " << getpid() << "\n";
+
+    while (true) {
+        sleep(10);
+    }
+}
+
+# Makefile
+CC=g++
+CFLAGS=-Wall -g
+TARGET=signal-echo
+
+all: $(TARGET)
+
+$(TARGET): signal-echo.cpp
+	$(CC) $(CFLAGS) -o $(TARGET) signal-echo.cpp
+
+clean:
+	rm -f $(TARGET)
