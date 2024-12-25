@@ -1,0 +1,72 @@
+#include <iostream>
+#include <vector>
+#include <thread>
+#include <random>
+#include <chrono>
+#include <numeric>
+
+std::vector<int> array;
+long long partial_sum = 0;
+
+void sum_portion(int start, int end) {
+    long long local_sum = 0;
+    for (int i = start; i < end; ++i) {
+        local_sum += array[i];
+    }
+    __sync_fetch_and_add(&partial_sum, local_sum);
+}
+
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        std::cerr << "Usage: ./array-summary <N> <M>\n";
+        return 1;
+    }
+
+    int N = std::stoi(argv[1]);
+    int M = std::stoi(argv[2]);
+
+    array.resize(N);
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<int> dist(1, 100);
+    for (int &val : array) {
+        val = dist(rng);
+    }
+
+    auto start = std::chrono::high_resolution_clock::now();
+    long long total_sum = std::accumulate(array.begin(), array.end(), 0LL);
+    auto end = std::chrono::high_resolution_clock::now();
+    std::cout << "Time spent without threads: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
+
+    start = std::chrono::high_resolution_clock::now();
+    std::vector<std::thread> threads;
+    int chunk_size = N / M;
+
+    for (int i = 0; i < M; ++i) {
+        int start_idx = i * chunk_size;
+        int end_idx = (i == M - 1) ? N : start_idx + chunk_size;
+        threads.emplace_back(sum_portion, start_idx, end_idx);
+    }
+
+    for (auto &t : threads) {
+        t.join();
+    }
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "Time spent with " << M << " threads: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
+
+    return 0;
+}
+
+# Makefile
+CC=g++
+CFLAGS=-Wall -g -std=c++11 -pthread
+TARGET=array-summary
+
+all: $(TARGET)
+
+$(TARGET): array-summary.cpp
+	$(CC) $(CFLAGS) -o $(TARGET) array-summary.cpp
+
+clean:
+	rm -f $(TARGET)
